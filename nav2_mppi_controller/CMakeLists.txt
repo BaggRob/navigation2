@@ -19,6 +19,24 @@ include_directories(
   include
 )
 
+# ros-humble-depthai-v3 installs its own copy of xtl 0.8.0 straight into the
+# shared /opt/ros/humble/include prefix, which every ROS package's -isystem
+# include path picks up. That shadows the system xtl 0.7.2 (from xtl-dev)
+# that this system's xtensor 0.23.10 was built against, and xtl 0.8 dropped
+# xtl::sequence_size / xtl::conjunction / xtl::disjunction that xtensor
+# 0.23.10 still calls, breaking the build. GCC always searches -I entries
+# before -isystem ones regardless of command-line order, so pointing an -I
+# entry at the real system xtl reliably shadows the depthai copy back.
+set(XTL_SHIM_DIR ${CMAKE_CURRENT_BINARY_DIR}/xtl_shim)
+if(EXISTS /usr/include/xtl)
+  file(MAKE_DIRECTORY ${XTL_SHIM_DIR})
+  if(NOT EXISTS ${XTL_SHIM_DIR}/xtl)
+    file(CREATE_LINK /usr/include/xtl ${XTL_SHIM_DIR}/xtl SYMBOLIC)
+  endif()
+else()
+  message(WARNING "System /usr/include/xtl not found; skipping depthai/xtl shadowing workaround")
+endif()
+
 set(dependencies_pkgs
   rclcpp
   nav2_common
@@ -99,6 +117,9 @@ foreach(lib IN LISTS libraries)
   target_include_directories(${lib} PUBLIC ${xsimd_INCLUDE_DIRS})  #  ${OpenMP_INCLUDE_DIRS}
   target_link_libraries(${lib} xtensor xtensor::optimize xtensor::use_xsimd)
   ament_target_dependencies(${lib} ${dependencies_pkgs})
+  if(EXISTS ${XTL_SHIM_DIR}/xtl)
+    target_include_directories(${lib} BEFORE PUBLIC ${XTL_SHIM_DIR})
+  endif()
 endforeach()
 
 install(TARGETS mppi_controller mppi_critics
