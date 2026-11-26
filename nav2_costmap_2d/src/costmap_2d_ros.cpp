@@ -38,6 +38,8 @@
 
 #include "nav2_costmap_2d/costmap_2d_ros.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <chrono>
 #include <string>
@@ -94,6 +96,7 @@ Costmap2DROS::Costmap2DROS(const rclcpp::NodeOptions & options)
   declare_parameter("robot_base_frame", rclcpp::ParameterValue(std::string("base_link")));
   declare_parameter("robot_radius", rclcpp::ParameterValue(0.1));
   declare_parameter("rolling_window", rclcpp::ParameterValue(false));
+  declare_parameter("rolling_window_forward_offset", rclcpp::ParameterValue(0.0));
   declare_parameter("track_unknown_space", rclcpp::ParameterValue(false));
   declare_parameter("transform_tolerance", rclcpp::ParameterValue(0.3));
   declare_parameter("trinary_costmap", rclcpp::ParameterValue(true));
@@ -146,6 +149,7 @@ Costmap2DROS::Costmap2DROS(
   declare_parameter("robot_base_frame", rclcpp::ParameterValue(std::string("base_link")));
   declare_parameter("robot_radius", rclcpp::ParameterValue(0.1));
   declare_parameter("rolling_window", rclcpp::ParameterValue(false));
+  declare_parameter("rolling_window_forward_offset", rclcpp::ParameterValue(0.0));
   declare_parameter("track_unknown_space", rclcpp::ParameterValue(false));
   declare_parameter("transform_tolerance", rclcpp::ParameterValue(0.3));
   declare_parameter("trinary_costmap", rclcpp::ParameterValue(true));
@@ -175,6 +179,34 @@ Costmap2DROS::on_configure(const rclcpp_lifecycle::State & /*state*/)
     layered_costmap_->resizeMap(
       (unsigned int)(map_width_meters_ / resolution_),
       (unsigned int)(map_height_meters_ / resolution_), resolution_, origin_x_, origin_y_);
+  }
+
+  // Read here rather than kept as a member, so Costmap2DROS keeps the size that
+  // the servers allocating it were built against.
+  double rolling_window_forward_offset = 0.0;
+  get_parameter("rolling_window_forward_offset", rolling_window_forward_offset);
+  if (rolling_window_forward_offset != 0.0) {
+    if (!rolling_window_) {
+      RCLCPP_WARN(
+        get_logger(), "rolling_window_forward_offset is ignored: rolling_window is false");
+    } else {
+      const auto * costmap = layered_costmap_->getCostmap();
+      const double half_size =
+        std::min(costmap->getSizeInMetersX(), costmap->getSizeInMetersY()) / 2;
+      // Not a configure failure: controller_server carries on with a costmap
+      // that failed to configure, so fall back to the stock centered window.
+      if (std::fabs(rolling_window_forward_offset) >= half_size) {
+        RCLCPP_ERROR(
+          get_logger(), "rolling_window_forward_offset %.3f m puts the robot outside its own "
+          "rolling window (half-size %.3f m), centering the window on the robot instead",
+          rolling_window_forward_offset, half_size);
+      } else {
+        RCLCPP_INFO(
+          get_logger(), "Rolling window centered %.3f m ahead of the robot",
+          rolling_window_forward_offset);
+        layered_costmap_->setRollingWindowForwardOffset(rolling_window_forward_offset);
+      }
+    }
   }
 
   // Create the transform-related objects

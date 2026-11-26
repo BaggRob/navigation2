@@ -33,6 +33,7 @@
  */
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <utility>
@@ -459,9 +460,11 @@ DWBLocalPlanner::transformGlobalPlan(
   }
 
   // we'll discard points on the plan that are outside the local costmap
+  // (a rolling window centered off the robot reaches |offset| further along its heading)
   nav2_costmap_2d::Costmap2D * costmap = costmap_ros_->getCostmap();
   double dist_threshold = std::max(costmap->getSizeInCellsX(), costmap->getSizeInCellsY()) *
-    costmap->getResolution() / 2.0;
+    costmap->getResolution() / 2.0 +
+    std::fabs(costmap_ros_->getLayeredCostmap()->getRollingWindowForwardOffset());
 
   // If prune_plan is enabled (it is by default) then we want to restrict the
   // plan to distances within that range as well.

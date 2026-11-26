@@ -14,6 +14,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cmath>
+
 #include "nav2_mppi_controller/tools/path_handler.hpp"
 #include "nav2_mppi_controller/tools/utils.hpp"
 #include "nav2_costmap_2d/costmap_2d_ros.hpp"
@@ -166,8 +168,10 @@ bool PathHandler::transformPose(
 double PathHandler::getMaxCostmapDist()
 {
   const auto & costmap = costmap_->getCostmap();
+  // A rolling window centered off the robot reaches |offset| further along its heading.
   return static_cast<double>(std::max(costmap->getSizeInCellsX(), costmap->getSizeInCellsY())) *
-         costmap->getResolution() * 0.50;
+         costmap->getResolution() * 0.50 +
+         std::fabs(costmap_->getLayeredCostmap()->getRollingWindowForwardOffset());
 }
 
 void PathHandler::setPath(const nav_msgs::msg::Path & plan)

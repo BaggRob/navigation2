@@ -39,6 +39,7 @@
 #define NAV2_COSTMAP_2D__LAYERED_COSTMAP_HPP_
 
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -118,6 +119,36 @@ public:
   {
     return rolling_window_;
   }
+
+  /**
+   * @brief Shift a rolling window's center along the robot's heading
+   *
+   * The window stays axis-aligned in the global frame; only its center moves,
+   * to @p offset meters ahead of the robot (negative: behind). With the robot
+   * heading along a map axis the window then reaches size / 2 + offset ahead
+   * and size / 2 - offset behind; at other headings both reaches are longer.
+   * Ignored unless the costmap is rolling. 0 (the default) keeps the window
+   * centered on the robot.
+   */
+  void setRollingWindowForwardOffset(double offset);
+
+  /** @brief The offset set with setRollingWindowForwardOffset() */
+  double getRollingWindowForwardOffset() const
+  {
+    return rolling_window_forward_offset_;
+  }
+
+  /**
+   * @brief The origin a rolling window takes with the robot at this pose
+   *
+   * updateMap() moves the master grid here, and every rolling layer that owns
+   * its own grid must move it to the same point from its updateBounds(), with
+   * the pose it was given: updateWithMax() and friends copy cells by index, so
+   * a layer grid anchored anywhere else lands shifted in the master grid.
+   */
+  void getRollingWindowOrigin(
+    double robot_x, double robot_y, double robot_yaw,
+    double & origin_x, double & origin_y) const;
 
   /**
    * @brief If this costmap is tracking unknown space or not
@@ -230,6 +261,16 @@ private:
   bool size_locked_;
   double circumscribed_radius_, inscribed_radius_;
   std::vector<geometry_msgs::msg::Point> footprint_;
+
+  /** @brief Warns when the footprint can reach past the edge of a shifted rolling window. */
+  void checkRollingWindowFit();
+
+  // Kept after every pre-existing member so packages built against the old
+  // header still find those at the same offsets (only nav2_costmap_2d itself
+  // allocates a LayeredCostmap).
+  double rolling_window_forward_offset_;
+  // Layers already reported for keeping their own grid off the shifted window.
+  std::set<std::string> misaligned_layers_reported_;
 };
 
 }  // namespace nav2_costmap_2d

@@ -38,6 +38,7 @@
 #include "nav2_costmap_2d/layered_costmap.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -68,7 +69,8 @@ LayeredCostmap::LayeredCostmap(std::string global_frame, bool rolling_window, bo
   initialized_(false),
   size_locked_(false),
   circumscribed_radius_(1.0),
-  inscribed_radius_(0.1)
+  inscribed_radius_(0.1),
+  rolling_window_forward_offset_(0.0)
 {
   if (track_unknown) {
     primary_costmap_.setDefaultValue(255);
@@ -121,6 +123,50 @@ void LayeredCostmap::resizeMap(
   {
     (*filter)->matchSize();
   }
+  checkRollingWindowFit();
+}
+
+void LayeredCostmap::setRollingWindowForwardOffset(double offset)
+{
+  std::unique_lock<Costmap2D::mutex_t> lock(*(combined_costmap_.getMutex()));
+  rolling_window_forward_offset_ = offset;
+  checkRollingWindowFit();
+}
+
+void LayeredCostmap::getRollingWindowOrigin(
+  double robot_x, double robot_y, double robot_yaw,
+  double & origin_x, double & origin_y) const
+{
+  double center_x = robot_x;
+  double center_y = robot_y;
+  // Skipped at 0 so a centered window keeps exactly the origin it always had.
+  if (rolling_window_forward_offset_ != 0.0) {
+    center_x += rolling_window_forward_offset_ * std::cos(robot_yaw);
+    center_y += rolling_window_forward_offset_ * std::sin(robot_yaw);
+  }
+  origin_x = center_x - combined_costmap_.getSizeInMetersX() / 2;
+  origin_y = center_y - combined_costmap_.getSizeInMetersY() / 2;
+}
+
+void LayeredCostmap::checkRollingWindowFit()
+{
+  // Without a footprint yet, circumscribed_radius_ is only a placeholder.
+  if (!rolling_window_ || rolling_window_forward_offset_ == 0.0 || footprint_.empty()) {
+    return;
+  }
+  // The window's center is |offset| from the robot, so a footprint that fits
+  // in the disc the window inscribes stays inside it at every heading.
+  const double half_size = std::min(
+    combined_costmap_.getSizeInMetersX(), combined_costmap_.getSizeInMetersY()) / 2;
+  const double reach = std::fabs(rolling_window_forward_offset_) + circumscribed_radius_;
+  if (reach > half_size) {
+    RCLCPP_WARN(
+      rclcpp::get_logger("nav2_costmap_2d"),
+      "rolling_window_forward_offset %.3f m plus the footprint's circumscribed radius "
+      "%.3f m exceeds the window's %.3f m half-size: part of the footprint can leave the "
+      "costmap, and collision checks there fail as off the grid.",
+      rolling_window_forward_offset_, circumscribed_radius_, half_size);
+  }
 }
 
 bool LayeredCostmap::isOutofBounds(double robot_x, double robot_y)
@@ -138,8 +184,8 @@ void LayeredCostmap::updateMap(double robot_x, double robot_y, double robot_yaw)
   // if we're using a rolling buffer costmap...
   // we need to update the origin using the robot's position
   if (rolling_window_) {
-    double new_origin_x = robot_x - combined_costmap_.getSizeInMetersX() / 2;
-    double new_origin_y = robot_y - combined_costmap_.getSizeInMetersY() / 2;
+    double new_origin_x, new_origin_y;
+    getRollingWindowOrigin(robot_x, robot_y, robot_yaw, new_origin_x, new_origin_y);
     primary_costmap_.updateOrigin(new_origin_x, new_origin_y);
     combined_costmap_.updateOrigin(new_origin_x, new_origin_y);
   }
@@ -173,6 +219,28 @@ void LayeredCostmap::updateMap(double robot_x, double robot_y, double robot_yaw)
         prev_minx, prev_miny, prev_maxx, prev_maxy,
         minx_, miny_, maxx_, maxy_,
         (*plugin)->getName().c_str());
+    }
+    // A rolling layer that still centers its own grid on the robot (robot - size / 2)
+    // instead of using getRollingWindowOrigin() would have its cells copied into the
+    // master grid shifted by the offset: obstacles drawn in the wrong place.
+    if (rolling_window_ && rolling_window_forward_offset_ != 0.0 && (*plugin)->isEnabled()) {
+      auto grid = std::dynamic_pointer_cast<Costmap2D>(*plugin);
+      const double tolerance = combined_costmap_.getResolution() / 2;
+      if (grid &&
+        grid->getSizeInCellsX() == combined_costmap_.getSizeInCellsX() &&
+        grid->getSizeInCellsY() == combined_costmap_.getSizeInCellsY() &&
+        (std::fabs(grid->getOriginX() - combined_costmap_.getOriginX()) > tolerance ||
+        std::fabs(grid->getOriginY() - combined_costmap_.getOriginY()) > tolerance) &&
+        misaligned_layers_reported_.insert((*plugin)->getName()).second)
+      {
+        RCLCPP_ERROR(
+          rclcpp::get_logger("nav2_costmap_2d"),
+          "Layer %s keeps its grid at (%f, %f) but the rolling window is at (%f, %f): it does "
+          "not support rolling_window_forward_offset and its obstacles land shifted in the "
+          "costmap. Make it call LayeredCostmap::getRollingWindowOrigin() or set the offset "
+          "to 0.", (*plugin)->getName().c_str(), grid->getOriginX(), grid->getOriginY(),
+          combined_costmap_.getOriginX(), combined_costmap_.getOriginY());
+      }
     }
   }
   for (vector<std::shared_ptr<Layer>>::iterator filter = filters_.begin();
@@ -278,6 +346,7 @@ void LayeredCostmap::setFootprint(const std::vector<geometry_msgs::msg::Point> &
   nav2_costmap_2d::calculateMinAndMaxDistances(
     footprint_spec,
     inscribed_radius_, circumscribed_radius_);
+  checkRollingWindowFit();
 
   for (vector<std::shared_ptr<Layer>>::iterator plugin = plugins_.begin();
     plugin != plugins_.end();

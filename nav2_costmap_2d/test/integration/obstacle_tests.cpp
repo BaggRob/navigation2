@@ -32,6 +32,7 @@
  * Test harness for ObstacleLayer for Costmap2D
  */
 
+#include <cmath>
 #include <memory>
 #include <string>
 #include <algorithm>
@@ -406,6 +407,64 @@ TEST_F(TestNode, testRaytracing) {
   lethal_count = countValues(*(layers.getCostmap()), nav2_costmap_2d::LETHAL_OBSTACLE);
 
   ASSERT_EQ(lethal_count, 1);
+}
+
+/**
+ * Test a rolling window centered ahead of the robot (rolling_window_forward_offset)
+ */
+TEST_F(TestNode, testRollingWindowForwardOffset) {
+  tf2_ros::Buffer tf(node_->get_clock());
+
+  // 4 m window: getSizeInMetersX() = 3.95 m, so it reaches 1.975 m each way when centered
+  nav2_costmap_2d::LayeredCostmap layers("frame", true, false);
+  layers.resizeMap(40, 40, 0.1, 0, 0);
+  std::shared_ptr<nav2_costmap_2d::ObstacleLayer> olayer = nullptr;
+  addObstacleLayer(layers, tf, node_, olayer);
+  nav2_costmap_2d::Costmap2D * master = layers.getCostmap();
+
+  // Offset 0 is the stock robot-centered origin
+  double ox, oy;
+  layers.getRollingWindowOrigin(0.3, -0.2, 1.0, ox, oy);
+  EXPECT_DOUBLE_EQ(ox, 0.3 - master->getSizeInMetersX() / 2);
+  EXPECT_DOUBLE_EQ(oy, -0.2 - master->getSizeInMetersY() / 2);
+
+  layers.setRollingWindowForwardOffset(1.0);
+  EXPECT_DOUBLE_EQ(layers.getRollingWindowForwardOffset(), 1.0);
+
+  // 2.7 m ahead (past a centered window's 1.975 m) and 1.5 m behind (past this one's 0.975 m)
+  addObservation(olayer, 2.7, 0.0, MAX_Z / 2, 0, 0, MAX_Z / 2);
+  addObservation(olayer, -1.5, 0.0, MAX_Z / 2, 0, 0, MAX_Z / 2);
+
+  // Heading +x: the window spans x in [-0.975, 2.975] before snapping to the grid
+  layers.updateMap(0, 0, 0);
+  EXPECT_NEAR(master->getOriginX(), -0.9, 1e-9);
+  EXPECT_NEAR(master->getOriginY(), -1.9, 1e-9);
+  // The layer's own grid has to sit exactly on the master's, cell for cell
+  EXPECT_DOUBLE_EQ(olayer->getOriginX(), master->getOriginX());
+  EXPECT_DOUBLE_EQ(olayer->getOriginY(), master->getOriginY());
+
+  unsigned int mx, my;
+  ASSERT_TRUE(master->worldToMap(2.7, 0.0, mx, my));
+  EXPECT_EQ(master->getCost(mx, my), nav2_costmap_2d::LETHAL_OBSTACLE);
+  EXPECT_FALSE(master->worldToMap(-1.5, 0.0, mx, my));
+  ASSERT_TRUE(master->worldToMap(0.0, 0.0, mx, my));
+  EXPECT_EQ(countValues(*master, nav2_costmap_2d::LETHAL_OBSTACLE), 1);
+
+  // Heading +y: the window swings round to x in [-1.975, 1.975], y in [-0.975, 2.975]
+  // (updateOrigin() truncates the cell shift toward zero, so y snaps to -1.0 from -1.9)
+  addObservation(olayer, 0.0, 2.7, MAX_Z / 2, 0, 0, MAX_Z / 2);
+  layers.updateMap(0, 0, M_PI / 2);
+  EXPECT_NEAR(master->getOriginX(), -1.9, 1e-9);
+  EXPECT_NEAR(master->getOriginY(), -1.0, 1e-9);
+  EXPECT_DOUBLE_EQ(olayer->getOriginX(), master->getOriginX());
+  EXPECT_DOUBLE_EQ(olayer->getOriginY(), master->getOriginY());
+  ASSERT_TRUE(master->worldToMap(0.0, 2.7, mx, my));
+  EXPECT_EQ(master->getCost(mx, my), nav2_costmap_2d::LETHAL_OBSTACLE);
+  // Now beside the robot, the point behind is back inside; the one 2.7 m along x is out
+  ASSERT_TRUE(master->worldToMap(-1.5, 0.0, mx, my));
+  EXPECT_EQ(master->getCost(mx, my), nav2_costmap_2d::LETHAL_OBSTACLE);
+  EXPECT_FALSE(master->worldToMap(2.7, 0.0, mx, my));
+  EXPECT_EQ(countValues(*master, nav2_costmap_2d::LETHAL_OBSTACLE), 2);
 }
 
 /**

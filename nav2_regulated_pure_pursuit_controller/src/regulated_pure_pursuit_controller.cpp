@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <limits>
 #include <memory>
@@ -137,7 +138,9 @@ void RegulatedPurePursuitController::configure(
   node->get_parameter(
     plugin_name_ + ".approach_velocity_scaling_dist",
     approach_velocity_scaling_dist_);
-  if (approach_velocity_scaling_dist_ > costmap_->getSizeInMetersX() / 2.0) {
+  if (approach_velocity_scaling_dist_ > costmap_->getSizeInMetersX() / 2.0 +
+    costmap_ros_->getLayeredCostmap()->getRollingWindowForwardOffset())
+  {
     RCLCPP_WARN(
       logger_, "approach_velocity_scaling_dist is larger than forward costmap extent, "
       "leading to permanent slowdown");
@@ -818,7 +821,9 @@ double RegulatedPurePursuitController::getCostmapMaxExtent() const
 {
   const double max_costmap_dim_meters = std::max(
     costmap_->getSizeInMetersX(), costmap_->getSizeInMetersY());
-  return max_costmap_dim_meters / 2.0;
+  // A rolling window centered off the robot reaches |offset| further along its heading.
+  return max_costmap_dim_meters / 2.0 +
+         std::fabs(costmap_ros_->getLayeredCostmap()->getRollingWindowForwardOffset());
 }
 
 
