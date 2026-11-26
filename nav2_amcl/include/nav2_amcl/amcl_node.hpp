@@ -148,6 +148,9 @@ protected:
   map_t * convertMap(const nav_msgs::msg::OccupancyGrid & map_msg);
   bool first_map_only_{true};
   std::atomic<bool> first_map_received_{false};
+  // A global localization request that arrived before any map: the uniform
+  // pose generator samples the map, so it runs once the map comes in.
+  bool global_localization_pending_{false};
   amcl_hyp_t * initial_pose_hyp_;
   std::recursive_mutex mutex_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::ConstSharedPtr map_sub_;
@@ -210,6 +213,10 @@ protected:
     const std::shared_ptr<rmw_request_id_t> request_header,
     const std::shared_ptr<std_srvs::srv::Empty::Request> request,
     std::shared_ptr<std_srvs::srv::Empty::Response> response);
+  /*
+   * @brief Spread the particles uniformly over the free space of map_
+   */
+  void initGlobalLocalization();
 
   // service server for providing an initial pose guess
   rclcpp::Service<nav2_msgs::srv::SetInitialPose>::SharedPtr initial_guess_srv_;

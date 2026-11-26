@@ -342,6 +342,7 @@ AmclNode::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
     map_ = nullptr;
   }
   first_map_received_ = false;
+  global_localization_pending_ = false;
   free_space_indices.resize(0);
 
   // Transforms
@@ -487,6 +488,25 @@ AmclNode::globalLocalizationCallback(
 {
   std::lock_guard<std::recursive_mutex> cfl(mutex_);
 
+  if (map_ == nullptr) {
+    // uniformPoseGenerator reads the map and its free-space index; with no
+    // map yet it would dereference a null map.
+    RCLCPP_WARN(
+      get_logger(),
+      "Global localization requested before a map was received; "
+      "deferring it until the map arrives");
+    global_localization_pending_ = true;
+    return;
+  }
+  initGlobalLocalization();
+}
+
+void
+AmclNode::initGlobalLocalization()
+{
+  std::lock_guard<std::recursive_mutex> cfl(mutex_);
+  global_localization_pending_ = false;
+
   RCLCPP_INFO(get_logger(), "Initializing with uniform distribution");
 
   pf_init_model(
@@ -612,6 +632,8 @@ AmclNode::handleInitialPose(geometry_msgs::msg::PoseWithCovarianceStamped & msg)
   pf_init_ = false;
   init_pose_received_on_inactive = false;
   initial_pose_is_known_ = true;
+  // A pose given after a deferred global localization request supersedes it.
+  global_localization_pending_ = false;
 }
 
 void
@@ -1414,6 +1436,11 @@ AmclNode::handleMapMessage(const nav_msgs::msg::OccupancyGrid & msg)
 #if NEW_UNIFORM_SAMPLING
   createFreeSpaceVector();
 #endif
+
+  if (global_localization_pending_) {
+    RCLCPP_INFO(get_logger(), "Running the global localization deferred until the map arrived");
+    initGlobalLocalization();
+  }
 }
 
 void
