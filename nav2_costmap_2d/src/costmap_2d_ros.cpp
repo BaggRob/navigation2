@@ -168,6 +168,17 @@ Costmap2DROS::on_configure(const rclcpp_lifecycle::State & /*state*/)
   RCLCPP_INFO(get_logger(), "Configuring");
   getParameters();
 
+  // A footprint that is set but is not a polygon (e.g. two corners of the
+  // robot's box) used to fall back to robot_radius, leaving the servers
+  // collision-checking a small circle instead of the robot.
+  if (use_radius_ && footprint_ != "" && footprint_ != "[]") {
+    RCLCPP_ERROR(
+      get_logger(), "The footprint parameter is invalid: \"%s\". It must be a list of at "
+      "least 3 [x, y] points; leave it unset or [] to use robot_radius. Not configuring.",
+      footprint_.c_str());
+    return nav2_util::CallbackReturn::FAILURE;
+  }
+
   callback_group_ = create_callback_group(
     rclcpp::CallbackGroupType::MutuallyExclusive, false);
 
@@ -193,8 +204,7 @@ Costmap2DROS::on_configure(const rclcpp_lifecycle::State & /*state*/)
       const auto * costmap = layered_costmap_->getCostmap();
       const double half_size =
         std::min(costmap->getSizeInMetersX(), costmap->getSizeInMetersY()) / 2;
-      // Not a configure failure: controller_server carries on with a costmap
-      // that failed to configure, so fall back to the stock centered window.
+      // Not a configure failure: fall back to the stock centered window.
       if (std::fabs(rolling_window_forward_offset) >= half_size) {
         RCLCPP_ERROR(
           get_logger(), "rolling_window_forward_offset %.3f m puts the robot outside its own "
@@ -437,6 +447,7 @@ Costmap2DROS::getParameters()
   }
 
   // 3. If the footprint has been specified, it must be in the correct format
+  //    (on_configure fails if it is not)
   use_radius_ = true;
 
   if (footprint_ != "" && footprint_ != "[]") {
@@ -445,11 +456,6 @@ Costmap2DROS::getParameters()
     if (makeFootprintFromString(footprint_, new_footprint)) {
       // The specified footprint is valid, so we'll use that instead of the radius
       use_radius_ = false;
-    } else {
-      // Footprint provided but invalid, so stay with the radius
-      RCLCPP_ERROR(
-        get_logger(), "The footprint parameter is invalid: \"%s\", using radius (%lf) instead",
-        footprint_.c_str(), robot_radius_);
     }
   }
 }
@@ -758,11 +764,17 @@ Costmap2DROS::dynamicParametersCallback(std::vector<rclcpp::Parameter> parameter
       }
     } else if (type == ParameterType::PARAMETER_STRING) {
       if (name == "footprint") {
-        footprint_ = parameter.as_string();
         std::vector<geometry_msgs::msg::Point> new_footprint;
-        if (makeFootprintFromString(footprint_, new_footprint)) {
-          setRobotFootprint(new_footprint);
+        if (!makeFootprintFromString(parameter.as_string(), new_footprint)) {
+          RCLCPP_ERROR(
+            get_logger(), "Rejecting footprint \"%s\": it must be a list of at least 3 [x, y] "
+            "points. Keeping the current footprint.", parameter.as_string().c_str());
+          result.successful = false;
+          result.reason = "footprint must be a list of at least 3 [x, y] points";
+          return result;
         }
+        footprint_ = parameter.as_string();
+        setRobotFootprint(new_footprint);
       } else if (name == "robot_base_frame") {
         // First, make sure that the transform between the robot base frame
         // and the global frame is available

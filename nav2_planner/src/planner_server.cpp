@@ -81,7 +81,12 @@ PlannerServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Configuring");
 
-  costmap_ros_->configure();
+  // A costmap that fails to configure (e.g. an invalid footprint) has no map
+  // to plan on.
+  if (costmap_ros_->configure().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
+    RCLCPP_FATAL(get_logger(), "Failed to configure the global costmap");
+    return nav2_util::CallbackReturn::FAILURE;
+  }
   costmap_ = costmap_ros_->getCostmap();
 
   if (!costmap_ros_->getUseRadius()) {

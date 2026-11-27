@@ -122,7 +122,12 @@ ControllerServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
   get_parameter("failure_tolerance", failure_tolerance_);
   get_parameter("publish_zero_velocity", publish_zero_velocity_);
 
-  costmap_ros_->configure();
+  // A costmap that fails to configure (e.g. an invalid footprint) has no map
+  // to check collisions against.
+  if (costmap_ros_->configure().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
+    RCLCPP_FATAL(get_logger(), "Failed to configure the local costmap");
+    return nav2_util::CallbackReturn::FAILURE;
+  }
   // Launch a thread to run the costmap node
   costmap_thread_ = std::make_unique<nav2_util::NodeThread>(costmap_ros_);
 

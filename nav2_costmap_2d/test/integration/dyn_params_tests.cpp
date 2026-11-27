@@ -99,7 +99,37 @@ TEST(DynParamTestNode, testDynParamsSet)
     "[[-0.325, -0.325], [-0.325, 0.325], [0.325, 0.325], [0.46, 0.0], [0.325, -0.325]]");
   EXPECT_EQ(costmap->get_parameter("robot_base_frame").as_string(), "test_frame");
 
+  // A footprint that is not a polygon must be rejected, keeping the current one
+  auto results3 = parameter_client->set_parameters_atomically(
+  {
+    rclcpp::Parameter("footprint", "[[0.2067, 0.3650], [-0.6108, -0.3650]]"),
+  });
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(costmap->get_node_base_interface());
+  executor.add_node(node->get_node_base_interface());
+  ASSERT_EQ(
+    executor.spin_until_future_complete(results3, std::chrono::seconds(5)),
+    rclcpp::FutureReturnCode::SUCCESS);
+  EXPECT_FALSE(results3.get().successful);
+  EXPECT_EQ(
+    costmap->get_parameter("footprint").as_string(),
+    "[[-0.325, -0.325], [-0.325, 0.325], [0.325, 0.325], [0.46, 0.0], [0.325, -0.325]]");
+  EXPECT_EQ(costmap->getRobotFootprint().size(), 5u);
+  executor.remove_node(node->get_node_base_interface());
+  executor.remove_node(costmap->get_node_base_interface());
+
   costmap->on_deactivate(rclcpp_lifecycle::State());
   costmap->on_cleanup(rclcpp_lifecycle::State());
   costmap->on_shutdown(rclcpp_lifecycle::State());
+}
+
+TEST(DynParamTestNode, testInvalidFootprintFailsConfigure)
+{
+  // Two corners of the robot's box: not a polygon. Configuring must fail
+  // rather than silently fall back to robot_radius.
+  auto costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("test_costmap_bad_footprint");
+  costmap->set_parameter(
+    rclcpp::Parameter("footprint", "[[0.2067, 0.3650], [-0.6108, -0.3650]]"));
+  EXPECT_EQ(
+    costmap->on_configure(rclcpp_lifecycle::State()), nav2_util::CallbackReturn::FAILURE);
 }
